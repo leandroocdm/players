@@ -11,7 +11,7 @@ http.createServer(async (req, res) => {
 
   if (url.pathname === '/') {
     res.setHeader('content-type', 'text/html; charset=utf-8');
-    return fs.createReadStream(path.join(__dirname, 'iptv-web.html')).pipe(res);
+    return fs.createReadStream(path.join(__dirname, 'index.html')).pipe(res);
   }
   if (url.pathname !== '/p') { res.statusCode = 404; return res.end(); }
 
