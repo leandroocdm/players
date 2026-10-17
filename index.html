@@ -56,7 +56,7 @@ dialog label{display:block;color:var(--m);font-size:13px;margin:12px 0 6px}
  aside h1{display:none}.src{flex:none;max-width:60vw}
  #pl{order:-1;border:0;position:static;padding:env(safe-area-inset-top,0) 0 0}
  #pl:not(.on){display:none}
- .vw{border-radius:0}#pt,#ps{margin:0 16px}
+ .vw{border-radius:0}#pt,#pb{margin:0 16px}
 }
 </style>
 </head>
@@ -77,7 +77,7 @@ dialog label{display:block;color:var(--m);font-size:13px;margin:12px 0 6px}
  <section id="pl">
   <div class="vw"><video id="v" controls playsinline autoplay></video><div id="pm">Selecione um canal</div></div>
   <div id="pt"></div>
-  <button class="btn g" id="ps">Parar</button>
+  <div id="pb" style="display:flex;gap:8px"><button class="btn g" id="ps" style="flex:1">Parar</button><button class="btn g" id="cp" style="flex:1">Copiar link</button></div>
  </section>
 </div>
 
@@ -101,7 +101,7 @@ dialog label{display:block;color:var(--m);font-size:13px;margin:12px 0 6px}
 const $=s=>document.querySelector(s), ROW=56;
 const vp=$('#vp'), sp=$('#sp'), v=$('#v');
 let sources=JSON.parse(localStorage.getItem('iptv.sources')||'[]');
-let cur=null, ch=null, view=[], pool=[], np=null, kill=null, onVErr=null, tok=0, pid=0, logoT, hideT, tm, tab=0, AUTOPROXY=false;
+let cur=null, ch=null, view=[], pool=[], np=null, kill=null, onVErr=null, tok=0, pid=0, logoT, hideT, tm, tab=0, AUTOPROXY=false, FF=false;
 
 /* ---------- cache em IndexedDB (a lista fica no disco, não no localStorage) ---------- */
 const db=new Promise((res,rej)=>{const r=indexedDB.open('iptv',1);r.onupgradeneeded=()=>r.result.createObjectStore('pl');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
@@ -246,27 +246,31 @@ const E={
   p.on(mpegts.Events.ERROR,()=>fail());
   p.attachMediaElement(v); p.load(); p.play();
  },
- direct(u,fail){onVErr=fail; v.src=u; v.play().catch(()=>{})}
+ direct(u,fail){onVErr=fail; v.src=u; v.play().catch(()=>{})},
+ remux(u,fail){onVErr=fail; v.src='/t?u='+encodeURIComponent(u); v.play().catch(()=>{})},
+ x264(u,fail){onVErr=fail; v.src='/t?enc=1&u='+encodeURIComponent(u); v.play().catch(()=>{})}
 };
 function play(c){
  const my=++pid; release(); np=c; $('#pt').textContent=c[0]; msg('Conectando…'); $('#pl').classList.add('on'); draw();
  const u=c[1], live=kind(c)===0, isM3=/\.m3u8(\?|$)/i.test(u);
  const hu=/\.ts(\?.*)?$/i.test(u)?u.replace(/\.ts(\?.*)?$/i,'.m3u8$1'):(u.includes('?')||/\.[a-z0-9]{2,4}$/i.test(u))?u:u.replace(/\/?$/,'.m3u8');
- let plan=isM3?[['hls',u],['direct',u]]:live?[['hls',hu],['ts',u],['direct',u]]:[['direct',u]];
+ const heavy=/\.(mkv|avi|wmv|flv|mov)(\?|$)/i.test(u), rx=AUTOPROXY&&FF?[['remux',u],['x264',u]]:[];
+ let plan=isM3?[['hls',u],['direct',u]]:live?[['hls',hu],['ts',u],['direct',u]]:(heavy&&rx.length)?rx:[['direct',u],...rx];
  if(live&&!isM3&&v.canPlayType('application/vnd.apple.mpegurl'))plan.splice(1,0,['direct',hu]);
  let i=0;
  const next=()=>{
   if(my!==pid)return; release();
-  if(i>=plan.length){msg(!live?'Este formato pode não ser suportado pelo navegador (mkv/avi costumam falhar).':AUTOPROXY?'Não foi possível reproduzir este canal.':'Não foi possível reproduzir. Provável bloqueio de CORS: rode com o proxy local (node server.js).'); return}
+  if(i>=plan.length){msg(!live?(AUTOPROXY&&FF?'Não foi possível reproduzir este arquivo. Use "Copiar link" e abra no VLC.':'Este formato pode não ser compatível com o navegador. Rode o proxy local com ffmpeg instalado (node server.js) ou use "Copiar link" e abra no VLC.'):AUTOPROXY?'Não foi possível reproduzir este canal.':'Não foi possível reproduzir. Provável bloqueio de CORS: rode com o proxy local (node server.js).'); return}
   const [e,url]=plan[i++]; msg(i>1?'Tentando outro formato…':'Conectando…');
-  tm=setTimeout(next,live?12000:25000);
-  E[e](px(url),next);
+  tm=setTimeout(next,live?12000:20000);
+  E[e](/^(remux|x264)$/.test(e)?url:px(url),next);
  };
  next();
 }
 v.addEventListener('playing',()=>{clearTimeout(tm); msg('')});
 v.addEventListener('error',()=>{if(onVErr&&v.getAttribute('src'))onVErr()});
 $('#ps').onclick=()=>{stop(); draw()};
+$('#cp').onclick=async()=>{if(!np)return; try{await navigator.clipboard.writeText(np[1]); $('#cp').textContent='Copiado'; setTimeout(()=>$('#cp').textContent='Copiar link',1500)}catch(e){prompt('Copie o link:',np[1])}};
 // aba em segundo plano por mais de 1 min: libera o stream (exceto em picture-in-picture)
 document.addEventListener('visibilitychange',()=>{
  clearTimeout(hideT);
@@ -277,7 +281,7 @@ addEventListener('pagehide',stop);
 /* ---------- monitor de memória ---------- */
 function stats(){
  const mem=performance.memory?` · heap ${(performance.memory.usedJSHeapSize/1048576).toFixed(0)} MB`:'';
- $('#ms').textContent=`${ch?ch.length:0} canais · ${view.length} no filtro · ${pool.length} linhas no DOM${mem}${AUTOPROXY?' · proxy local':''}`;
+ $('#ms').textContent=`${ch?ch.length:0} canais · ${view.length} no filtro · ${pool.length} linhas no DOM${mem}${AUTOPROXY?' · proxy local'+(FF?' + ffmpeg':''):''}`;
 }
 setInterval(stats,3000);
 
@@ -297,7 +301,7 @@ $('#sv').onclick=()=>{
 };
 
 (async()=>{
- try{const r=await fetch('/p',{cache:'no-store'}); AUTOPROXY=r.headers.get('x-iptv-proxy')==='1'}catch(e){}
+ try{const r=await fetch('/p',{cache:'no-store'}); AUTOPROXY=r.headers.get('x-iptv-proxy')==='1'; FF=r.headers.get('x-iptv-ffmpeg')==='1'}catch(e){}
  renderSources(); groups(); applyFilter(); stats(); stop();
  if(sources.length)open(sources[0]);
 })();
