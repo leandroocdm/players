@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>IPTV</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
 <style>
 :root{--bg:#0b0c10;--s:#15171c;--s2:#1d2027;--a:#4f8cff;--t:#f5f6fa;--m:#8a8f98}
 *{box-sizing:border-box}
@@ -22,7 +23,8 @@ aside h1{font-size:20px;font-weight:600;margin:0 0 8px}
 .btn{background:var(--a);border:0;color:#fff;padding:11px 16px;border-radius:10px;font-weight:600;cursor:pointer}
 .btn.g{background:var(--s2)}
 main{display:flex;flex-direction:column;min-width:0;min-height:0}
-.bar{display:flex;gap:8px;padding:16px 16px 8px}
+.tabs{display:flex;gap:6px;padding:16px 16px 0}.tabs button{background:var(--s);border:0;border-radius:10px;padding:8px 14px;cursor:pointer;color:var(--m)}.tabs button.on{background:var(--a);color:#fff}
+.bar{display:flex;gap:8px;padding:12px 16px 8px}
 input,select{background:var(--s);border:0;border-radius:10px;padding:11px 12px;width:100%;min-width:0}
 input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--a);outline-offset:1px}
 .bar select{width:40%}
@@ -66,6 +68,7 @@ dialog label{display:block;color:var(--m);font-size:13px;margin:12px 0 6px}
   <button class="btn" id="add">Adicionar lista</button>
  </aside>
  <main>
+  <div class="tabs" id="tabs"></div>
   <div class="bar"><input id="q" type="search" placeholder="Buscar canal" autocomplete="off"><select id="gp" aria-label="Grupo"></select></div>
   <div id="st"></div>
   <div id="vp"><div id="sp"></div></div>
@@ -98,7 +101,7 @@ dialog label{display:block;color:var(--m);font-size:13px;margin:12px 0 6px}
 const $=s=>document.querySelector(s), ROW=56;
 const vp=$('#vp'), sp=$('#sp'), v=$('#v');
 let sources=JSON.parse(localStorage.getItem('iptv.sources')||'[]');
-let cur=null, ch=null, view=[], pool=[], np=null, hls=null, tok=0, logoT, hideT, hmr=0, hnr=0;
+let cur=null, ch=null, view=[], pool=[], np=null, kill=null, onVErr=null, tok=0, pid=0, logoT, hideT, tm, tab=0, AUTOPROXY=false;
 
 /* ---------- cache em IndexedDB (a lista fica no disco, não no localStorage) ---------- */
 const db=new Promise((res,rej)=>{const r=indexedDB.open('iptv',1);r.onupgradeneeded=()=>r.result.createObjectStore('pl');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
@@ -125,7 +128,7 @@ async function parseStream(reader){
  }
  pool_s.clear(); return out;
 }
-const prox=(u,p)=>p?p+encodeURIComponent(u):u;
+const prox=(u,p)=>p?p+encodeURIComponent(u):AUTOPROXY?'/p?u='+encodeURIComponent(u):u;
 async function fetchM3U(s){const r=await fetch(prox(s.url,s.proxy)); if(!r.ok)throw Error('HTTP '+r.status); return parseStream(r.body.getReader())}
 async function fetchXtream(s){
  const b=s.host.replace(/\/+$/,''), q=`${b}/player_api.php?username=${encodeURIComponent(s.user)}&password=${encodeURIComponent(s.pass)}`;
@@ -159,16 +162,26 @@ let raf=0; vp.addEventListener('scroll',()=>{if(!raf)raf=requestAnimationFrame((
 addEventListener('resize',draw);
 sp.addEventListener('click',ev=>{const e=ev.target.closest('.row'); if(e&&ch)play(ch[e._i])});
 
+/* ---------- ao vivo / filmes / séries (classificado pela URL; funciona com listas já em cache) ---------- */
+const KINDS=['Ao vivo','Filmes','Séries'];
+const kind=c=>c[4]!==undefined?c[4]:(c[4]=/\/series\//i.test(c[1])?2:(/\/movie\//i.test(c[1])||/\.(mp4|mkv|avi|mov|wmv|flv)(\?|$)/i.test(c[1]))?1:0);
+function renderTabs(){
+ const n=[0,0,0]; if(ch)for(const c of ch)n[kind(c)]++;
+ const b=$('#tabs'); b.replaceChildren();
+ KINDS.forEach((k,i)=>{const x=document.createElement('button'); x.textContent=`${k} ${n[i]}`; x.className=i===tab?'on':''; x.onclick=()=>{tab=i; groups(); applyFilter()}; b.append(x)});
+}
+
 /* ---------- busca e grupos ---------- */
 function applyFilter(){
  const q=$('#q').value.trim().toLowerCase(), g=$('#gp').value; view=[];
- if(ch)for(let i=0;i<ch.length;i++){const c=ch[i]; if(g&&c[3]!==g)continue; if(q&&!c[0].toLowerCase().includes(q))continue; view.push(i)}
+ if(ch)for(let i=0;i<ch.length;i++){const c=ch[i]; if(kind(c)!==tab)continue; if(g&&c[3]!==g)continue; if(q&&!c[0].toLowerCase().includes(q))continue; view.push(i)}
  sp.style.height=view.length*ROW+'px'; vp.scrollTop=0; draw(); stats();
 }
 function groups(){
- const m=new Map(); if(ch)for(const c of ch)if(c[3])m.set(c[3],(m.get(c[3])||0)+1);
+ const m=new Map(); if(ch)for(const c of ch)if(c[3]&&kind(c)===tab)m.set(c[3],(m.get(c[3])||0)+1);
  const s=$('#gp'); s.replaceChildren(new Option('Todos os grupos',''));
  [...m].sort((a,b)=>a[0].localeCompare(b[0])).slice(0,500).forEach(([k,n])=>s.add(new Option(`${k} (${n})`,k)));
+ renderTabs();
 }
 let qT; $('#q').addEventListener('input',()=>{clearTimeout(qT); qT=setTimeout(applyFilter,200)});
 $('#gp').addEventListener('change',applyFilter);
@@ -209,32 +222,50 @@ async function remove(s){
  renderSources();
 }
 
-/* ---------- player: um único hls ativo, buffers curtos, tudo destruído ao trocar ---------- */
+/* ---------- player: tenta HLS, depois MPEG-TS, depois direto; um único motor ativo e buffers curtos ---------- */
 const msg=t=>$('#pm').textContent=t;
-function stop(){
- if(hls){hls.destroy(); hls=null}
- v.pause(); v.removeAttribute('src'); v.load(); np=null;
- $('#pt').textContent=''; msg('Selecione um canal'); $('#pl').classList.remove('on');
-}
+const px=u=>AUTOPROXY?'/p?u='+encodeURIComponent(u):u;
+function release(){clearTimeout(tm); if(kill){try{kill()}catch(e){} kill=null} onVErr=null; v.pause(); v.removeAttribute('src'); v.load()}
+function stop(){pid++; release(); np=null; $('#pt').textContent=''; msg('Selecione um canal'); $('#pl').classList.remove('on')}
+const E={
+ hls(u,fail){
+  if(!(window.Hls&&Hls.isSupported()))return fail();
+  const h=new Hls({maxBufferLength:20,maxMaxBufferLength:30,maxBufferSize:30e6,backBufferLength:10,manifestLoadingMaxRetry:1,levelLoadingMaxRetry:1,fragLoadingMaxRetry:2});
+  let n=0,m=0; kill=()=>h.destroy();
+  h.loadSource(u); h.attachMedia(v);
+  h.on(Hls.Events.MANIFEST_PARSED,()=>v.play().catch(()=>{}));
+  h.on(Hls.Events.ERROR,(_,d)=>{if(!d.fatal)return;
+   if(d.type===Hls.ErrorTypes.NETWORK_ERROR&&d.details!=='manifestLoadError'&&n++<2)h.startLoad();
+   else if(d.type===Hls.ErrorTypes.MEDIA_ERROR&&m++<2)h.recoverMediaError();
+   else fail()});
+ },
+ ts(u,fail){
+  if(!(window.mpegts&&mpegts.isSupported()))return fail();
+  const p=mpegts.createPlayer({type:'mpegts',isLive:true,url:u},{enableWorker:true,autoCleanupSourceBuffer:true,autoCleanupMaxBackwardDuration:30,autoCleanupMinBackwardDuration:15,liveBufferLatencyChasing:true});
+  kill=()=>{p.pause(); p.unload(); p.detachMediaElement(); p.destroy()};
+  p.on(mpegts.Events.ERROR,()=>fail());
+  p.attachMediaElement(v); p.load(); p.play();
+ },
+ direct(u,fail){onVErr=fail; v.src=u; v.play().catch(()=>{})}
+};
 function play(c){
- if(hls){hls.destroy(); hls=null}
- v.pause(); v.removeAttribute('src'); v.load();
- np=c; hmr=hnr=0; $('#pt').textContent=c[0]; msg(''); $('#pl').classList.add('on');
- const u=c[1], direct=()=>{v.src=u; v.play().catch(()=>{})};
- if(window.Hls&&Hls.isSupported()&&!/\.(mp4|webm)(\?|$)/i.test(u)){
-  hls=new Hls({maxBufferLength:20,maxMaxBufferLength:30,maxBufferSize:30e6,backBufferLength:10,manifestLoadingMaxRetry:2,levelLoadingMaxRetry:2,fragLoadingMaxRetry:3});
-  hls.loadSource(u); hls.attachMedia(v);
-  hls.on(Hls.Events.MANIFEST_PARSED,()=>v.play().catch(()=>{}));
-  hls.on(Hls.Events.ERROR,(_,d)=>{
-   if(!d.fatal)return;
-   if(d.type===Hls.ErrorTypes.NETWORK_ERROR&&hnr++<2)hls.startLoad();
-   else if(d.type===Hls.ErrorTypes.MEDIA_ERROR&&hmr++<2)hls.recoverMediaError();
-   else{hls.destroy(); hls=null; d.details==='manifestParsingError'?direct():msg('Não foi possível reproduzir este canal.')}
-  });
- } else direct();
- draw();
+ const my=++pid; release(); np=c; $('#pt').textContent=c[0]; msg('Conectando…'); $('#pl').classList.add('on'); draw();
+ const u=c[1], live=kind(c)===0, isM3=/\.m3u8(\?|$)/i.test(u);
+ const hu=/\.ts(\?.*)?$/i.test(u)?u.replace(/\.ts(\?.*)?$/i,'.m3u8$1'):(u.includes('?')||/\.[a-z0-9]{2,4}$/i.test(u))?u:u.replace(/\/?$/,'.m3u8');
+ let plan=isM3?[['hls',u],['direct',u]]:live?[['hls',hu],['ts',u],['direct',u]]:[['direct',u]];
+ if(live&&!isM3&&v.canPlayType('application/vnd.apple.mpegurl'))plan.splice(1,0,['direct',hu]);
+ let i=0;
+ const next=()=>{
+  if(my!==pid)return; release();
+  if(i>=plan.length){msg(!live?'Este formato pode não ser suportado pelo navegador (mkv/avi costumam falhar).':AUTOPROXY?'Não foi possível reproduzir este canal.':'Não foi possível reproduzir. Provável bloqueio de CORS: rode com o proxy local (node server.js).'); return}
+  const [e,url]=plan[i++]; msg(i>1?'Tentando outro formato…':'Conectando…');
+  tm=setTimeout(next,live?12000:25000);
+  E[e](px(url),next);
+ };
+ next();
 }
-v.addEventListener('error',()=>{if(np&&!hls&&v.getAttribute('src'))msg('Formato não suportado pelo navegador (ex.: .ts puro).')});
+v.addEventListener('playing',()=>{clearTimeout(tm); msg('')});
+v.addEventListener('error',()=>{if(onVErr&&v.getAttribute('src'))onVErr()});
 $('#ps').onclick=()=>{stop(); draw()};
 // aba em segundo plano por mais de 1 min: libera o stream (exceto em picture-in-picture)
 document.addEventListener('visibilitychange',()=>{
@@ -246,7 +277,7 @@ addEventListener('pagehide',stop);
 /* ---------- monitor de memória ---------- */
 function stats(){
  const mem=performance.memory?` · heap ${(performance.memory.usedJSHeapSize/1048576).toFixed(0)} MB`:'';
- $('#ms').textContent=`${ch?ch.length:0} canais · ${view.length} no filtro · ${pool.length} linhas no DOM${mem}`;
+ $('#ms').textContent=`${ch?ch.length:0} canais · ${view.length} no filtro · ${pool.length} linhas no DOM${mem}${AUTOPROXY?' · proxy local':''}`;
 }
 setInterval(stats,3000);
 
@@ -265,8 +296,11 @@ $('#sv').onclick=()=>{
  sources.push(s); persist(); dlg.close(); open(s,true,f);
 };
 
-renderSources(); applyFilter(); stats(); stop();
-if(sources.length)open(sources[0]);
+(async()=>{
+ try{const r=await fetch('/p',{cache:'no-store'}); AUTOPROXY=r.headers.get('x-iptv-proxy')==='1'}catch(e){}
+ renderSources(); groups(); applyFilter(); stats(); stop();
+ if(sources.length)open(sources[0]);
+})();
 </script>
 </body>
 </html>
