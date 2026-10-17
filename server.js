@@ -1,8 +1,10 @@
 // Uso: node server.js  (Node 18+) e abra http://localhost:8787
-// Serve o iptv-web.html e repassa listas/streams com CORS liberado.
+// Serve o index.html e repassa listas/streams com CORS liberado.
 // Escuta só em 127.0.0.1, então só o seu computador usa.
 const http = require('http'), fs = require('fs'), path = require('path');
 const { Readable } = require('stream');
+const { spawn, spawnSync } = require('child_process');
+const FF = spawnSync('ffmpeg', ['-version']).status === 0; // ffmpeg instalado?
 const PORT = 8787;
 const P = u => '/p?u=' + encodeURIComponent(u);
 
@@ -13,11 +15,30 @@ http.createServer(async (req, res) => {
     res.setHeader('content-type', 'text/html; charset=utf-8');
     return fs.createReadStream(path.join(__dirname, 'index.html')).pipe(res);
   }
+  // Filmes/séries em mkv, avi etc.: converte na hora para MP4 (vídeo copiado, áudio em AAC).
+  // ?enc=1 recodifica o vídeo em H.264 (mais pesado, resolve HEVC). Sem seek na conversão.
+  if (url.pathname === '/t') {
+    const u = url.searchParams.get('u');
+    if (!FF) { res.statusCode = 501; return res.end('ffmpeg não encontrado'); }
+    if (!u || !/^https?:\/\//i.test(u)) { res.statusCode = 400; return res.end(); }
+    const vc = url.searchParams.get('enc')
+      ? ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p']
+      : ['-c:v', 'copy'];
+    const ff = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', u,
+      '-map', '0:v:0', '-map', '0:a:0?', ...vc, '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
+      '-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1']);
+    res.setHeader('content-type', 'video/mp4');
+    ff.stdout.pipe(res);
+    ff.on('error', () => res.end());
+    res.on('close', () => ff.kill('SIGKILL')); // trocou de canal: mata o ffmpeg
+    return;
+  }
   if (url.pathname !== '/p') { res.statusCode = 404; return res.end(); }
 
   res.setHeader('access-control-allow-origin', '*');
   res.setHeader('access-control-expose-headers', '*');
   res.setHeader('x-iptv-proxy', '1');
+  res.setHeader('x-iptv-ffmpeg', FF ? '1' : '0');
 
   const u = url.searchParams.get('u');
   if (!u) return res.end('ok'); // ping: o app usa para detectar o proxy
